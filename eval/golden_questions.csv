@@ -1,0 +1,14 @@
+id,question,expected_count,notes
+1,How many patients are there?,800,
+2,How many women are in the database?,389,
+3,Patients with type 2 diabetes,177,count distinct patients
+4,Patients over 50,401,strictly older than 50 on 2026-11-01
+5,Patients with both diabetes and high blood pressure,67,"""high blood pressure"" = essential hypertension"
+6,Diabetic women over 50 with an HbA1c above 8,16,uses the most recent HbA1c
+7,Patients on insulin,28,
+8,People with stage 3 kidney disease whose latest eGFR is below 45,26,
+9,Men aged 65 or older with coronary heart disease,11,
+10,Obese women under 40,23,obesity condition code
+11,Prediabetic patients whose latest BMI is 30 or more,27,
+12,Patients without a hypertension diagnosis whose latest systolic BP is 140 or higher,11,possibly undiagnosed hypertension
+13,Diabetics living in Boston,32,
