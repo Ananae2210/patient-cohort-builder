@@ -65,14 +65,25 @@ def connect_readonly(timeout_s: float = 5.0) -> sqlite3.Connection:
     return con
 
 
-def run_query(sql: str, params: list | tuple = (), timeout_s: float = 5.0, max_rows: int = 5000) -> pd.DataFrame:
-    """Run a read-only query and return a DataFrame (at most `max_rows` rows)."""
+MAX_ROWS = 50_000
+
+
+def run_query(sql: str, params: list | tuple = (), timeout_s: float = 5.0,
+              max_rows: int = MAX_ROWS) -> pd.DataFrame:
+    """Run a read-only query and return a DataFrame.
+
+    At most `max_rows` rows are kept. If the query had more, the result is never cut
+    off silently: df.attrs["truncated"] is set to True so callers can warn the user.
+    """
     con = connect_readonly(timeout_s)
     try:
         cur = con.execute(sql, params)
         cols = [d[0] for d in cur.description] if cur.description else []
-        rows = cur.fetchmany(max_rows)
-        return pd.DataFrame(rows, columns=cols)
+        rows = cur.fetchmany(max_rows + 1)
+        truncated = len(rows) > max_rows
+        df = pd.DataFrame(rows[:max_rows], columns=cols)
+        df.attrs["truncated"] = truncated
+        return df
     except sqlite3.OperationalError as e:
         if "interrupted" in str(e).lower():
             raise TimeoutError(f"Query took longer than {timeout_s:.0f} seconds and was stopped.") from e
@@ -85,11 +96,21 @@ def population_size() -> int:
     return int(run_query("SELECT COUNT(*) AS n FROM patients").iloc[0, 0])
 
 
+ENRICH_BATCH = 900  # stay well under SQLite's limit on ? placeholders per query
+
+
 def enrich_patients(ids: list[str]) -> pd.DataFrame:
     """Standard dashboard columns for a list of patient ids, whatever query produced them."""
+    cols = ["id", "name", "gender", "age", "race", "city",
+            "latest_hba1c", "latest_bmi", "latest_sbp", "conditions"]
     if not ids:
-        return pd.DataFrame(columns=["id", "name", "gender", "age", "race", "city",
-                                     "latest_hba1c", "latest_bmi", "latest_sbp", "conditions"])
+        return pd.DataFrame(columns=cols)
+    parts = [_enrich_batch(ids[i:i + ENRICH_BATCH]) for i in range(0, len(ids), ENRICH_BATCH)]
+    df = pd.concat(parts, ignore_index=True)
+    return df.sort_values(["name"], kind="stable").reset_index(drop=True)
+
+
+def _enrich_batch(ids: list[str]) -> pd.DataFrame:
     placeholders = ",".join("?" * len(ids))
     sql = f"""
         SELECT p.id,
@@ -105,6 +126,5 @@ def enrich_patients(ids: list[str]) -> pd.DataFrame:
                   FROM conditions c WHERE c.patient = p.id AND c.stop IS NULL) AS conditions
         FROM patients p
         WHERE p.id IN ({placeholders})
-        ORDER BY p.last, p.first
     """
-    return run_query(sql, ids, max_rows=len(ids) + 1)
+    return run_query(sql, ids, timeout_s=30, max_rows=len(ids) + 1)

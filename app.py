@@ -19,8 +19,9 @@ import streamlit as st
 
 from src.cohort import CONDITIONS, MEDICATIONS, CohortFilters, build_sql
 from src.db import enrich_patients, population_size, run_query
+from src.limits import RateLimiter, global_limit, visitor_limit
 from src.llm import is_configured, model_name, provider
-from src.nl_to_sql import ask
+from src.nl_to_sql import MAX_QUESTION_CHARS, NLResult, ask
 
 st.set_page_config(page_title="Cohort Builder", page_icon="🩺", layout="wide")
 
@@ -48,15 +49,33 @@ st.markdown(f"""
 
 # ---------- cached helpers (save free-tier quota and keep the UI fast) ----------
 
+@st.cache_resource
+def shared_limiter() -> RateLimiter:
+    """One limiter shared by every visitor of this app."""
+    return RateLimiter(global_limit())
+
+
 def cached_ask(question: str):
     """Reuse answers to questions already asked this session (saves free-tier quota).
-    Failed answers are not kept, so a retry after a rate limit really retries."""
+    Failed answers are not kept, so a retry after a rate limit really retries.
+    New questions are subject to the usage limits in src/limits.py."""
     cache = st.session_state.setdefault("answers", {})
     key = question.strip().lower()
     if key in cache:
         return cache[key]
+
+    mine = st.session_state.setdefault("limiter", RateLimiter(visitor_limit()))
+    if not mine.try_acquire():
+        wait = max(1, mine.seconds_until_free() // 60)
+        return NLResult(question=question, error=f"You've reached the limit of {visitor_limit()} questions "
+                                                 f"per hour. Try again in about {wait} min, or use Choosing filters.")
+    if not shared_limiter().try_acquire():
+        wait = max(1, shared_limiter().seconds_until_free() // 60)
+        return NLResult(question=question, error="The app has reached its hourly question limit for everyone. "
+                                                 f"Try again in about {wait} min, or use Choosing filters.")
+
     result = ask(question)
-    if result.ok or result.clarification:
+    if result.ok or result.clarification or result.not_supported:
         cache[key] = result
     return result
 
@@ -90,9 +109,13 @@ def chips(items: list[str]) -> None:
 
 # ---------- dashboard for any cohort ----------
 
-def show_cohort(ids: list[str], sql: str | None, label: str, attempts=None) -> None:
+def show_cohort(ids: list[str], sql: str | None, label: str, attempts=None, truncated: bool = False) -> None:
     total = cached_population()
     df = cached_enrich(tuple(ids))
+
+    if truncated:
+        st.warning(f"This cohort is very large, so only the first {len(ids):,} patients are shown and counted. "
+                   "Add more criteria to narrow it down.")
 
     if df.empty:
         st.warning("No patients match. Try loosening one of the criteria, for example a lower threshold or a wider age range.")
@@ -209,6 +232,7 @@ if mode == "Asking in plain English":
     with st.form("ask", border=False):
         q_col, b_col = st.columns([6, 1])
         question = q_col.text_input("Question", key="question", label_visibility="collapsed",
+                                    max_chars=MAX_QUESTION_CHARS,
                                     placeholder="e.g. Diabetic women over 50 with an HbA1c above 8")
         submitted = b_col.form_submit_button("Find", type="primary", width="stretch")
 
@@ -237,6 +261,8 @@ if mode == "Asking in plain English":
         st.info("Try one of the examples above, or type your own question. "
                 "You can mention sex, age, conditions (diabetes, hypertension, kidney disease…), "
                 "lab results (HbA1c, BMI, blood pressure, LDL, eGFR), medications and city.")
+    elif result.not_supported:
+        st.info(result.not_supported)
     elif result.clarification:
         st.warning(f"**I need a bit more detail:** {result.clarification}")
         with st.form("clarify", border=False):
@@ -245,7 +271,7 @@ if mode == "Asking in plain English":
                 st.session_state["pending"] = f"{result.question}. To clarify: {answer.strip()}"
                 st.rerun()
     elif result.error:
-        st.error(f"Something went wrong: {result.error}")
+        st.error(result.error)
         st.caption("You can rephrase the question, or switch to **Choosing filters** in the sidebar.")
         if result.sql:
             with st.expander("Show the last SQL tried"):
@@ -253,7 +279,7 @@ if mode == "Asking in plain English":
     else:
         st.markdown(f"**{html.escape(result.explanation or result.question)}**")
         chips(result.assumptions)
-        show_cohort(result.patient_ids, result.sql, result.question, result.attempts)
+        show_cohort(result.patient_ids, result.sql, result.question, result.attempts, result.truncated)
 
 # ---------- mode 2: filters, no AI ----------
 
@@ -272,6 +298,8 @@ else:
     a1c_val = c6.number_input("HbA1c %", 4.0, 14.0, 8.0, 0.1, disabled=not use_a1c, label_visibility="collapsed")
     use_bmi = c7.checkbox("Latest BMI at least")
     bmi_val = c7.number_input("BMI", 15.0, 60.0, 30.0, 0.5, disabled=not use_bmi, label_visibility="collapsed")
+    include_past = st.checkbox("Also count past conditions and stopped medications",
+                               help="By default only current diagnoses and prescriptions count.")
 
     f = CohortFilters(
         gender={"Women": "F", "Men": "M"}.get(sex),
@@ -282,6 +310,7 @@ else:
         hba1c_above=a1c_val if use_a1c else None,
         bmi_at_least=bmi_val if use_bmi else None,
         city=None if city == "Any" else city,
+        include_past=include_past,
     )
     summary = [s for s in [
         sex if sex != "Any" else None,
@@ -290,9 +319,11 @@ else:
         f"Latest HbA1c > {a1c_val:g}%" if use_a1c else None,
         f"Latest BMI ≥ {bmi_val:g}" if use_bmi else None,
         city if city != "Any" else None,
+        "Including past" if include_past and (conds or meds) else None,
     ] if s]
     chips(summary or ["All patients"])
     sql, params = build_sql(f)
-    ids = run_query(sql, params)["id"].tolist()
+    rows = run_query(sql, params)
+    ids = rows["id"].tolist()
     shown_sql = sql + "\n-- parameters: " + ", ".join(map(str, params)) if params else sql
-    show_cohort(ids, shown_sql, "_".join(summary) or "all")
+    show_cohort(ids, shown_sql, "_".join(summary) or "all", truncated=bool(rows.attrs.get("truncated")))

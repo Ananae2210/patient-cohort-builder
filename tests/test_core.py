@@ -1,4 +1,4 @@
-"""Quick checks that need no API key. Run from the cohort-builder folder:
+"""Quick checks that need no API key (no AI calls are made). Run from the cohort-builder folder:
     python tests/test_core.py
 """
 import sys
@@ -6,9 +6,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import src.db as db  # noqa: E402
 from src.cohort import CONDITIONS, CohortFilters, get_cohort  # noqa: E402
-from src.db import run_query  # noqa: E402
+from src.db import enrich_patients, run_query  # noqa: E402
 from src.guardrails import is_safe  # noqa: E402
+from src.limits import RateLimiter  # noqa: E402
+from src.nl_to_sql import ask  # noqa: E402
 
 
 def check(name, cond):
@@ -41,6 +44,34 @@ try:
     results.append(check("runaway query is stopped", False))
 except TimeoutError:
     results.append(check("runaway query is stopped", True))
+
+# Edge cases
+asthma = CONDITIONS["Asthma"]
+results.append(check("conditions: only current asthma by default (40)",
+                     len(get_cohort(CohortFilters(condition_codes=[asthma]))) == 40))
+results.append(check("conditions: past asthma included on request (62)",
+                     len(get_cohort(CohortFilters(condition_codes=[asthma], include_past=True))) == 62))
+
+big = run_query("SELECT id FROM patients", max_rows=100)
+results.append(check("large results are flagged, not cut off silently",
+                     len(big) == 100 and big.attrs["truncated"] is True))
+results.append(check("normal results are not flagged",
+                     run_query("SELECT id FROM patients").attrs["truncated"] is False))
+
+all_ids = run_query("SELECT id FROM patients")["id"].tolist()
+db.ENRICH_BATCH = 150  # force several batches
+enriched = enrich_patients(all_ids)
+results.append(check("patient details work across batches (800 rows, no duplicates)",
+                     len(enriched) == 800 and enriched["id"].is_unique))
+
+lim = RateLimiter(limit=2, window_s=60)
+results.append(check("rate limit: allows 2, blocks the 3rd, frees up after the window",
+                     lim.try_acquire(0) and lim.try_acquire(1) and not lim.try_acquire(2)
+                     and lim.try_acquire(61)))
+
+results.append(check("very long questions are refused before calling the AI",
+                     ask("x" * 1000).error is not None))
+results.append(check("empty questions are refused before calling the AI", ask("   ").error is not None))
 
 print(f"\n{sum(results)}/{len(results)} passed")
 sys.exit(0 if all(results) else 1)

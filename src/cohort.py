@@ -48,6 +48,7 @@ class CohortFilters:
     max_age: int | None = None                     # inclusive
     condition_codes: list[str] = field(default_factory=list)   # must have ALL
     medication_codes: list[str] = field(default_factory=list)  # must have ALL
+    include_past: bool = False   # False: only current conditions/medications (stop IS NULL)
     hba1c_above: float | None = None               # latest HbA1c, strictly above
     hba1c_below: float | None = None               # latest HbA1c, strictly below
     bmi_at_least: float | None = None              # latest BMI, inclusive
@@ -68,11 +69,12 @@ def build_sql(f: CohortFilters) -> tuple[str, list]:
     if f.max_age is not None:
         where.append(f"{age} <= ?")
         params.append(int(f.max_age))
+    current = "" if f.include_past else " AND stop IS NULL"
     for code in f.condition_codes:
-        where.append("p.id IN (SELECT patient FROM conditions WHERE code = ?)")
+        where.append(f"p.id IN (SELECT patient FROM conditions WHERE code = ?{current})")
         params.append(code)
     for code in f.medication_codes:
-        where.append("p.id IN (SELECT patient FROM medications WHERE code = ?)")
+        where.append(f"p.id IN (SELECT patient FROM medications WHERE code = ?{current})")
         params.append(code)
     if f.hba1c_above is not None:
         where.append(f"{latest_obs_sql()} > ?")

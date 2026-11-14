@@ -6,7 +6,7 @@ An LLM (free tier only) turns plain English into SQL over synthetic patient data
 
 ![Cohort dashboard](docs/screenshots/cohort.png)
 
-**Results:** 12 of 13 benchmark questions answered correctly with Gemini 3.5 Flash (free tier), all on the first try. 12 of 12 safety and correctness checks pass. All data is synthetic.
+**Results:** 12 of 13 benchmark questions answered correctly with Gemini 3.5 Flash (free tier), all on the first try. 20 of 20 safety, correctness and edge-case checks pass. All data is synthetic.
 
 ## Run it (Windows)
 
@@ -24,7 +24,7 @@ The app reads your free Gemini key from `AI Learning\.env` (`GEMINI_API_KEY=...`
 Other useful commands:
 
 ```powershell
-python tests\test_core.py                     # 12 safety and correctness checks, no API key needed
+python tests\test_core.py                     # 20 safety, correctness and edge-case checks, no API key needed
 python eval\run_eval.py                       # score the AI on 13 benchmark questions (~2 min, uses free quota)
 python src\nl_to_sql.py "women over 60 on insulin"   # try one question in the terminal
 python data\generate_data.py                  # rebuild the database (same data every time)
@@ -56,6 +56,26 @@ question ─► LLM writes SQL + assumptions (JSON) ─► guardrails check ─�
 - **Two layers of safety** (`src/guardrails.py`, `src/db.py`): text checks give a friendly message, and the database itself is opened read-only with SQLite's authorizer, which refuses anything except reads from the 4 tables. Slow queries are stopped after 5 seconds.
 - **No-AI mode** (`src/cohort.py`): the same cohort from filters, with parameterised SQL.
 
+### Edge cases handled
+
+| Case | What happens |
+|---|---|
+| A question tries to change data, or says "ignore your rules" | Blocked by the text check and by the read-only database |
+| A query runs for more than 5 seconds | It's stopped with a clear message |
+| The AI writes SQL that fails | The error goes back to the AI, up to 3 tries |
+| The AI reply isn't valid JSON, or the free tier is rate-limited | Retried automatically |
+| The Gemini model is retired for your key | The next free model is tried |
+| The question is too vague ("sick old people") | The app asks a clarifying question |
+| The question isn't about a group of patients ("average HbA1c by city") | The app explains what it can do instead |
+| "Patients with asthma" | Only current diagnoses and prescriptions count, unless you say "history of" (or tick the box in filters mode) |
+| A very large cohort | Shown with a warning, never cut off silently |
+| An empty question, or one over 400 characters | Refused before calling the AI |
+| Lots of visitors on a public copy | At most 15 AI questions per visitor and 60 in total per hour (change with `MAX_QUESTIONS_PER_VISITOR_HOUR` and `MAX_QUESTIONS_PER_HOUR` in `.env`) |
+| No cohort matches | A friendly empty state with a tip |
+| No API key | Filters mode still works |
+
+Not handled yet (matters when you switch to real Synthea data): deceased patients, and HbA1c given in mmol/mol instead of %.
+
 ## Folder layout
 
 ```
@@ -65,6 +85,7 @@ cohort-builder/
 │   ├── db.py                # read-only connection, safety authorizer, patient details
 │   ├── cohort.py            # filters → SQL, no AI
 │   ├── llm.py               # Gemini / Groq / Ollama wrapper (all free)
+│   ├── limits.py            # questions-per-hour limits for public use
 │   ├── nl_to_sql.py         # English → SQL with checks and self-correction
 │   └── guardrails.py        # SQL safety checks
 ├── eval/

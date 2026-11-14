@@ -26,6 +26,8 @@ Later, this file becomes part of the prompt you send to the LLM, so keep it accu
 | code | SNOMED-CT code (filter on this, not the description) |
 | description | human-readable name |
 
+All conditions are still active except some asthma and depression diagnoses, which have a stop date. "Has X" means a current diagnosis (`stop IS NULL`).
+
 | code | description | patients |
 |---|---|---|
 | 44054006 | Diabetes mellitus type 2 (disorder) | 177 |
@@ -35,8 +37,8 @@ Later, this file becomes part of the prompt you send to the LLM, so keep it accu
 | 162864005 | Body mass index 30+ - obesity (finding) | 256 |
 | 433144002 | Chronic kidney disease stage 3 (disorder) | 66 |
 | 53741008 | Coronary heart disease (disorder) | 44 |
-| 195967001 | Asthma (disorder) | 62 |
-| 370143000 | Major depressive disorder (disorder) | 82 |
+| 195967001 | Asthma (disorder) | 62 (40 current) |
+| 370143000 | Major depressive disorder (disorder) | 82 (48 current) |
 
 ## observations (9,520 rows), lab results and vitals over time
 
