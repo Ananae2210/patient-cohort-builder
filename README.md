@@ -6,7 +6,7 @@ An LLM (free tier only) turns plain English into SQL over synthetic patient data
 
 ![Cohort dashboard](docs/screenshots/cohort.png)
 
-**Results:** 12 of 13 benchmark questions answered correctly with Gemini 3.5 Flash (free tier), all on the first try. 20 of 20 safety, correctness and edge-case checks pass. All data is synthetic.
+**Results:** 12 of 13 benchmark questions answered correctly with Gemini 3.5 Flash (free tier), all on the first try. 21 of 21 safety, correctness and edge-case checks pass. All data is synthetic.
 
 ## Run it (Windows)
 
@@ -24,7 +24,7 @@ The app reads your free Gemini key from `AI Learning\.env` (`GEMINI_API_KEY=...`
 Other useful commands:
 
 ```powershell
-python tests\test_core.py                     # 20 safety, correctness and edge-case checks, no API key needed
+python tests\test_core.py                     # 21 safety, correctness and edge-case checks, no API key needed
 python eval\run_eval.py                       # score the AI on 13 benchmark questions (~2 min, uses free quota)
 python src\nl_to_sql.py "women over 60 on insulin"   # try one question in the terminal
 python data\generate_data.py                  # rebuild the database (same data every time)
@@ -64,7 +64,7 @@ question ─► LLM writes SQL + assumptions (JSON) ─► guardrails check ─�
 | A query runs for more than 5 seconds | It's stopped with a clear message |
 | The AI writes SQL that fails | The error goes back to the AI, up to 3 tries |
 | The AI reply isn't valid JSON, or the free tier is rate-limited | Retried automatically |
-| The Gemini model is retired for your key | The next free model is tried |
+| The Gemini model is retired for your key, or overloaded (503/504) | The next free model is tried, then it waits and retries |
 | The question is too vague ("sick old people") | The app asks a clarifying question |
 | The question isn't about a group of patients ("average HbA1c by city") | The app explains what it can do instead |
 | "Patients with asthma" | Only current diagnoses and prescriptions count, unless you say "history of" (or tick the box in filters mode) |

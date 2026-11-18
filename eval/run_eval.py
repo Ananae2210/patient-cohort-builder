@@ -39,10 +39,15 @@ def main(only_ids: list[int]) -> None:
 
     print(f"Evaluating {len(golden)} questions with {provider()} / {model_name()}\n")
     rows = []
+    llm_failures_in_a_row = 0
     for i, g in enumerate(golden.itertuples(index=False)):
+        if llm_failures_in_a_row >= 3:
+            print("\nStopping early: the AI failed 3 questions in a row (it may be overloaded). Try again later.")
+            break
         if i:
             time.sleep(PAUSE_SECONDS)
         r = ask(g.question)
+        llm_failures_in_a_row = llm_failures_in_a_row + 1 if (r.error and not r.attempts) else 0
         got = len(r.patient_ids) if r.ok else None
         passed = got == g.expected_count
         status = "PASS" if passed else ("ASKED" if r.clarification else "FAIL")
@@ -56,6 +61,8 @@ def main(only_ids: list[int]) -> None:
                      "clarification": r.clarification, "error": r.error, "sql": r.sql,
                      "assumptions": " | ".join(r.assumptions)})
 
+    if not rows:
+        sys.exit("No questions were answered.")
     df = pd.DataFrame(rows)
     score = int(df["passed"].sum())
     print(f"\nScore: {score}/{len(df)} correct"

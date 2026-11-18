@@ -1,6 +1,7 @@
 """Quick checks that need no API key (no AI calls are made). Run from the cohort-builder folder:
     python tests/test_core.py
 """
+import os
 import sys
 from pathlib import Path
 
@@ -72,6 +73,41 @@ results.append(check("rate limit: allows 2, blocks the 3rd, frees up after the w
 results.append(check("very long questions are refused before calling the AI",
                      ask("x" * 1000).error is not None))
 results.append(check("empty questions are refused before calling the AI", ask("   ").error is not None))
+
+# Gemini overloaded (503): the next model is tried, with no real API call
+import src.llm as llm  # noqa: E402
+from google.genai import errors as genai_errors  # noqa: E402
+import google.genai as genai_module  # noqa: E402
+
+
+class _FakeModels:
+    def __init__(self, plan):
+        self.plan, self.called = plan, []
+
+    def generate_content(self, model, contents, config):
+        self.called.append(model)
+        code = self.plan.pop(0)
+        if code is None:
+            return type("Resp", (), {"text": '{"sql": null}'})()
+        raise genai_errors.APIError(code, {"error": {"code": code, "message": "test", "status": "TEST"}})
+
+
+fake = _FakeModels([503, None])
+real_client, real_key = genai_module.Client, os.environ.get("GEMINI_API_KEY")
+os.environ["GEMINI_API_KEY"] = "test-only"
+genai_module.Client = lambda **kwargs: type("C", (), {"models": fake})()
+llm._working_gemini_model = None
+try:
+    reply = llm.complete_json("system", [{"role": "user", "content": "q"}])
+    results.append(check("Gemini overloaded: falls back to the next model",
+                         reply == {"sql": None} and len(fake.called) == 2 and fake.called[0] != fake.called[1]))
+finally:
+    genai_module.Client = real_client
+    llm._working_gemini_model = None
+    if real_key is None:
+        os.environ.pop("GEMINI_API_KEY", None)
+    else:
+        os.environ["GEMINI_API_KEY"] = real_key
 
 print(f"\n{sum(results)}/{len(results)} passed")
 sys.exit(0 if all(results) else 1)

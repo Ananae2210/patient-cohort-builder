@@ -242,3 +242,4 @@ if __name__ == "__main__":
         print("Error:", r.error)
     if r.ok:
         print(len(r.patient_ids), "patients")
+    sys.exit(0 if (r.ok or r.clarification or r.not_supported) else 1)

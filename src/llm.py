@@ -36,6 +36,7 @@ GEMINI_FALLBACKS = ["gemini-3.5-flash", "gemini-3.7-flash", "gemini-3.8-flash",
                     "gemini-3.5-flash-lite", "gemini-2.5-flash"]
 _working_gemini_model: str | None = None
 TIMEOUT_SECONDS = 90
+BUSY_CODES = {500, 502, 503, 504}  # temporary overload or timeout on Google's side
 
 
 class LLMError(RuntimeError):
@@ -80,17 +81,24 @@ def complete_json(system: str, messages: list[dict]) -> dict:
         try:
             text = _call(system, messages)
             return _parse_json(text)
-        except _RateLimited as e:
+        except (_RateLimited, _Busy) as e:
             last_err = e
-            time.sleep(10 * (attempt + 1))
+            if attempt < 2:
+                time.sleep(10 * (attempt + 1))
         except json.JSONDecodeError as e:
             last_err = LLMError(f"The model didn't return valid JSON: {e}")
             messages = messages + [{"role": "user", "content": "Reply with valid JSON only, no other text."}]
+    if isinstance(last_err, _Busy):
+        raise LLMError(f"{last_err} Please try again in a minute, or use Choosing filters.")
     raise LLMError(str(last_err))
 
 
 class _RateLimited(Exception):
     pass
+
+
+class _Busy(Exception):
+    """Every model was temporarily overloaded. Worth waiting and trying again."""
 
 
 def _parse_json(text: str) -> dict:
@@ -132,6 +140,7 @@ def _gemini(system: str, messages: list[dict]) -> str:
     # The model from LLM_MODEL (or the one that worked last time) first, then the fallbacks.
     candidates = [model_name()] if os.getenv("LLM_MODEL") else \
         list(dict.fromkeys([model_name()] + GEMINI_FALLBACKS))
+    busy = None  # last "overloaded" error, if every model was busy
     for i, model in enumerate(candidates):
         try:
             resp = client.models.generate_content(model=model, contents=contents, config=config)
@@ -139,15 +148,21 @@ def _gemini(system: str, messages: list[dict]) -> str:
             code = getattr(e, "code", None)
             if code == 429:
                 raise _RateLimited(f"Gemini rate limit reached: {e}") from e
+            if code in BUSY_CODES:
+                busy = f"{model} returned {code}"
+                continue  # overloaded or timed out: another model may be free
             if code == 404 and i < len(candidates) - 1:
                 continue  # model retired or not available for this key: try the next one
             raise LLMError(f"Gemini error ({model}): {e}") from e
-        except Exception as e:  # timeouts and network errors
-            raise LLMError(f"Couldn't reach Gemini ({model}) within {TIMEOUT_SECONDS}s: {type(e).__name__}: {e}") from e
+        except Exception as e:  # network timeouts and connection errors
+            busy = f"{model} didn't answer within {TIMEOUT_SECONDS}s ({type(e).__name__})"
+            continue
         _working_gemini_model = model
         if not resp.text:
             raise LLMError("Gemini returned an empty reply (it may have been blocked by a safety filter).")
         return resp.text
+    if busy:
+        raise _Busy(f"Gemini is overloaded right now ({busy}).")
     raise LLMError("None of the Gemini models are available for this key. Set LLM_MODEL in .env.")
 
 
