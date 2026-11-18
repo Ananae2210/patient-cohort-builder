@@ -6,7 +6,7 @@ An LLM (free tier only) turns plain English into SQL over synthetic patient data
 
 ![Cohort dashboard](docs/screenshots/cohort.png)
 
-**Results:** 12 of 13 benchmark questions answered correctly with Gemini 3.5 Flash (free tier), all on the first try. 21 of 21 safety, correctness and edge-case checks pass. All data is synthetic.
+**Results:** 13 of 13 benchmark questions answered correctly with Gemini 3.5 Flash (free tier), all on the first try. 21 of 21 safety, correctness and edge-case checks pass. All data is synthetic.
 
 ## Run it (Windows)
 
