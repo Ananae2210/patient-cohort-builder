@@ -50,15 +50,17 @@ def main(only_ids: list[int]) -> None:
         llm_failures_in_a_row = llm_failures_in_a_row + 1 if (r.error and not r.attempts) else 0
         got = len(r.patient_ids) if r.ok else None
         passed = got == g.expected_count
-        status = "PASS" if passed else ("ASKED" if r.clarification else "FAIL")
+        status = "PASS" if passed else ("ASKED" if r.clarification else "DECLINED" if r.not_supported else "FAIL")
         print(f"[{status}] {g.id:>2}. {g.question}")
         print(f"        expected {g.expected_count}, got {got}, tries {len(r.attempts)}"
               + (f", error: {r.error}" if r.error else "")
-              + (f", asked: {r.clarification}" if r.clarification else ""))
+              + (f", asked: {r.clarification}" if r.clarification else "")
+              + (f", declined: {r.not_supported}" if r.not_supported else ""))
         rows.append({"id": g.id, "question": g.question, "expected": g.expected_count, "got": got,
                      "passed": passed, "tries": len(r.attempts),
                      "self_corrected": len(r.attempts) > 1 and r.ok,
-                     "clarification": r.clarification, "error": r.error, "sql": r.sql,
+                     "clarification": r.clarification, "not_supported": r.not_supported,
+                     "error": r.error, "sql": r.sql,
                      "assumptions": " | ".join(r.assumptions)})
 
     if not rows:
